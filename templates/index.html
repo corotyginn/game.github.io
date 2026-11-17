@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎨 Пиксель Батл</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #1a1a1a; color: #eee;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 20px; min-height: 100vh;
+  }
+  h1 {
+    font-size: 24px; margin-bottom: 12px;
+    background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb, #1dd1a1);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 12px; align-items: center; }
+  .palette { display: flex; flex-wrap: wrap; gap: 4px; max-width: 90vw; }
+  .swatch { width: 28px; height: 28px; border-radius: 6px; cursor: pointer; border: 2px solid transparent; transition: transform .1s; }
+  .swatch:hover { transform: scale(1.1); }
+  .swatch.active { border-color: #fff; box-shadow: 0 0 0 2px #000; }
+  #colorPicker { width: 44px; height: 28px; border: none; border-radius: 6px; cursor: pointer; background: transparent; }
+  .canvas-wrap { position: relative; background: #2a2a2a; padding: 8px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.5); touch-action: none; }
+  canvas { image-rendering: pixelated; display: block; border-radius: 4px; cursor: crosshair; }
+  .status { margin-top: 12px; font-size: 13px; color: #888; }
+  .status b { color: #48dbfb; }
+</style>
+</head>
+<body>
+<h1>🎨 Пиксель Батл</h1>
+<div class="toolbar">
+  <div class="palette" id="palette"></div>
+  <input type="color" id="colorPicker" value="#ffffff">
+</div>
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+</div>
+<div class="status">
+  Кликов: <b id="clicks">0</b> · Пикселей: <b id="count">0</b> · Синхронизация ✅
+</div>
+
+<script>
+const W = {{ W }}, H = {{ H }};
+const PIXEL_SIZE = Math.max(4, Math.floor(600 / Math.max(W, H)));
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width  = W * PIXEL_SIZE;
+canvas.height = H * PIXEL_SIZE;
+
+const PRESET = [
+  '#000000','#ffffff','#7f7f7f','#c3c3c3',
+  '#880015','#ed1c24','#ff7f27','#fff200',
+  '#22b14c','#00a2e8','#3f48cc','#a349a4',
+  '#b97a57','#ffaec9','#ffc90e','#efe4b0',
+  '#b5e61d','#99d9ea','#7092be','#c8bfe7'
+];
+let currentColor = '#ffffff';
+let pixels = {};   // "x,y" -> color
+let clicks = 0;
+
+const palette = document.getElementById('palette');
+PRESET.forEach(c => {
+  const d = document.createElement('div');
+  d.className = 'swatch';
+  d.style.background = c;
+  d.dataset.color = c;
+  d.onclick = () => selectColor(c);
+  palette.appendChild(d);
+});
+
+const picker = document.getElementById('colorPicker');
+picker.oninput = () => selectColor(picker.value);
+
+function selectColor(c) {
+  currentColor = c;
+  document.querySelectorAll('.swatch').forEach(s =>
+    s.classList.toggle('active', s.dataset.color === c)
+  );
+  picker.value = c;
+}
+
+function drawPixel(x, y, c) {
+  ctx.fillStyle = c;
+  ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+}
+
+function drawAll() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (const [k, c] of Object.entries(pixels)) {
+    const [x, y] = k.split(',').map(Number);
+    drawPixel(x, y, c);
+  }
+  if (PIXEL_SIZE >= 8) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= W; i++) {
+      ctx.beginPath(); ctx.moveTo(i * PIXEL_SIZE, 0);
+      ctx.lineTo(i * PIXEL_SIZE, canvas.height); ctx.stroke();
+    }
+    for (let j = 0; j <= H; j++) {
+      ctx.beginPath(); ctx.moveTo(0, j * PIXEL_SIZE);
+      ctx.lineTo(canvas.width, j * PIXEL_SIZE); ctx.stroke();
+    }
+  }
+}
+
+async function fetchPixels() {
+  try {
+    const r = await fetch('/api/pixels');
+    const arr = await r.json();
+    const fresh = {};
+    arr.forEach(p => fresh[p.x + ',' + p.y] = p.c);
+    for (const [k, c] of Object.entries(fresh)) {
+      if (pixels[k] !== c) {
+        const [x, y] = k.split(',').map(Number);
+        drawPixel(x, y, c);
+      }
+    }
+    pixels = fresh;
+    document.getElementById('count').textContent = arr.length;
+  } catch (e) { console.warn(e); }
+}
+
+async function placePixel(x, y) {
+  if (x < 0 || y < 0 || x >= W || y >= H) return;
+  const key = x + ',' + y;
+  if (pixels[key] === currentColor) return;
+  pixels[key] = currentColor;
+  drawPixel(x, y, currentColor);
+  clicks++;
+  document.getElementById('clicks').textContent = clicks;
+  try {
+    await fetch('/api/pixel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x, y, c: currentColor })
+    });
+  } catch (e) { console.warn(e); }
+}
+
+function posFromEvent(e) {
+  const r = canvas.getBoundingClientRect();
+  const scale = canvas.width / r.width;
+  const cx = (e.clientX - r.left) * scale;
+  const cy = (e.clientY - r.top) * scale;
+  return { x: Math.floor(cx / PIXEL_SIZE), y: Math.floor(cy / PIXEL_SIZE) };
+}
+
+let drawing = false;
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0 && e.pointerType === 'mouse') return;
+  drawing = true;
+  const { x, y } = posFromEvent(e);
+  placePixel(x, y);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drawing) return;
+  const { x, y } = posFromEvent(e);
+  placePixel(x, y);
+});
+window.addEventListener('pointerup', () => drawing = false);
+window.addEventListener('pointercancel', () => drawing = false);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+selectColor('#ffffff');
+drawAll();
+fetchPixels();
+setInterval(fetchPixels, 800);
+</script>
+</body>
+</html>
