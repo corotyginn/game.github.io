@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+pixels.db
+.venv/
+venv/
+.env
